@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <title>Chat Room</title>
+    <style>
+        video {
+            width: 500px;
+            height: 500px;
+        }
+
+        .videoGroup {
+            display: flex;
+            flex-direction: row;
+        }
+    </style>
+</head>
+
+<body>
+<div class="videoGroup">
+    <video id="localVideo" autoplay playsinline></video>
+    <div id="videos"></div>
+</div>
+
+<video id="screenVideo" autoplay playsinline></video>
+<div id="screenVideos"></div>
+
+<div>
+    <button onclick="startScreen()">Enable screen sharing</button>
+    <button onclick="closeScreen()">Disable screen sharing</button>
+    <button onclick="startVideo()">Turn on the camera</button>
+    <button onclick="closeVideo()">Turn off the camera.</button>
+    <button onclick="startAudio()">Turn on the mic</button>
+    <button onclick="closeAudio()">Turn off the mic</button>
+    <button onclick="leave()">Leave</button>
+</div>
+</body>
+
+<script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
+
+<script>
+    function getUid(id) {
+        return id ? id : uid;
+    }
+
+    function startScreen(id) {
+        id = getUid(id);
+        if (id != uid) {
+            sendMsg({ type: 'startScreen' });
+            return false;
+        }
+
+        if (!screenVideo.srcObject) {
+            let options = { audio: false, video: true };
+            navigator.mediaDevices.getDisplayMedia(options)
+                .then(stream => {
+                    screenVideo.srcObject = stream;
+                    for (let i in remotes) {
+                        onmessage({ uid: i, type: 's_join', msgType: 'PROTOCOL' });
+                    }
+
+                    stream.getVideoTracks()[0].addEventListener('ended', () => { closeScreen() });
+                });
+        }
+    }
+
+    function selfCloseScreen(ot) {
+        screenVideo.srcObject.getVideoTracks()[0].stop();
+
+        for (let i in remotes) {
+            sendMsg({ type: 'closeScreen', ot: ot });
+        }
+
+        screenVideo.srcObject = null;
+    }
+
+    function closeScreen(id, ot) {
+        id = getUid(id);
+        ot = (ot ? ot : 1);
+
+        if (id != uid) {
+            if (ot == 1 && remotes[id].screenVideo) {
+                remotes[id].screenVideo.srcObject = null;
+            } else {
+                sendMsg({ type: 'closeScreen', ot: 2 });
+            }
+
+            return false;
+        }
+
+        if (screenVideo.srcObject && ot == 1) {
+            selfCloseScreen(ot);
+        }
+    }
+
+    function startVideo(id) {
+        id = getUid(id);
+
+        if (id != uid) {
+            sendMsg({ type: 'startVideo' });
+            return false;
+        }
+
+        let videoTracks = localVideo.srcObject.getVideoTracks();
+        if (videoTracks && videoTracks.length > 0 && !videoTracks[0].enabled) {
+            videoTracks[0].enabled = true;
+        }
+    }
+
+    function closeVideo(id) {
+        id = getUid(id);
+
+        if (id != uid) {
+            sendMsg({ type: 'closeVideo' });
+            return false;
+        }
+
+        let videoTracks = localVideo.srcObject.getVideoTracks();
+        if (videoTracks && videoTracks.length > 0 && videoTracks[0].enabled) {
+            videoTracks[0].enabled = false;
+        }
+    }
+
+    function startAudio(id) {
+        id = getUid(id);
+
+        if (id != uid) {
+            sendMsg({ type: 'startAudio' });
+            return false;
+        }
+
+        let audioTracks = localVideo.srcObject.getAudioTracks();
+        if (audioTracks && audioTracks.length > 0 && !audioTracks[0].enabled) {
+            audioTracks[0].enabled = true;
+        }
+    }
+
+    function closeAudio(id) {
+        id = getUid(id);
+
+        if (id != uid) {
+            sendMsg({ type: 'closeAudio' });
+            return false;
+        }
+
+        let audioTracks = localVideo.srcObject.getAudioTracks();
+        if (audioTracks && audioTracks.length > 0 && audioTracks[0].enabled) {
+            audioTracks[0].enabled = false;
+        }
+    }
+
+    const remotes = {}
+    const localVideo = document.querySelector('#localVideo')
+    const videos = document.querySelector('#videos')
+
+    const screenVideo = document.querySelector('#screenVideo')
+    const screenVideos = document.querySelector('#screenVideos')
+
+    var uid = Math.floor(Math.random() * 10) + '';
+    var ws = new WebSocket('ws://127.0.0.1:8080/chat')
+    ws.onopen = function () {
+        heartBeat();
+        onopen();
+    }
+
+    function heartBeat() {
+        // setInterval(() => {
+        //     ws.send(JSON.stringify({msgType: 'HEARTBEAT'}))
+        // }, 3000)
+    }
+
+    function onopen() {
+        navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: true
+        }).then(stream => {
+            localVideo.srcObject = stream
+            ws.send(JSON.stringify({ msgType: 'JOIN', uid: uid, roomId: 1 }))
+            ws.onmessage = function (event) {
+                onmessage(JSON.parse(event.data))
+            }
+        })
+    }
+
+    async function onmessage(message) {
+        if (message.msgType == 'LEAVE') {
+            onleave(message.uid)
+        }
+
+        if (message.msgType == 'JOIN') {
+            createRTC(message.uid, localVideo.srcObject, 1)
+
+            const pc = remotes[message.uid].pc
+            const offer = await pc.createOffer()
+
+            pc.setLocalDescription(offer)
+            sendMsg({ type: 'offer', offer })
+
+            if (screenVideo.srcObject) {
+                onmessage({ uid: message.uid, msgType: 'PROTOCOL', type: 's_join' })
+            }
+        }
+
+        if (message.msgType == 'PROTOCOL' && message.type) {
+            switch (message.type) {
+                case 'offer': {
+                    createRTC(message.uid, localVideo.srcObject, 1)
+
+                    const pc = remotes[message.uid].pc
+                    pc.setRemoteDescription(new RTCSessionDescription(message.offer))
+
+                    const answer = await pc.createAnswer()
+                    pc.setLocalDescription(answer)
+
+                    sendMsg({ type: 'answer', answer })
+
+                    break
+                }
+
+                case 'answer': {
+                    const pc = remotes[message.uid].pc
+                    pc.setRemoteDescription(new RTCSessionDescription(message.answer))
+                    break
+                }
+
+                case 'candidate': {
+                    const pc = remotes[message.uid].pc
+                    pc.addIceCandidate(new RTCIceCandidate(message.candidate))
+                    break
+                }
+
+                case 's_join': {
+                    createRTC(message.uid, screenVideo.srcObject, 2)
+
+                    const pc = remotes[message.uid].s_pc
+                    const offer = await pc.createOffer()
+
+                    pc.setLocalDescription(offer)
+                    sendMsg({ type: 's_offer', offer })
+
+                    break
+                }
+
+                case 's_offer': {
+                    createRTC(message.uid, screenVideo.srcObject, 2)
+
+                    const pc = remotes[message.uid].s_pc
+                    pc.setRemoteDescription(new RTCSessionDescription(message.offer))
+
+                    const answer = await pc.createAnswer()
+                    pc.setLocalDescription(answer)
+
+                    sendMsg({ type: 's_answer', answer })
+
+                    break
+                }
+
+                case 's_answer': {
+                    const pc = remotes[message.uid].s_pc
+                    pc.setRemoteDescription(new RTCSessionDescription(message.answer))
+                    break
+                }
+
+                case 's_candidate': {
+                    const pc = remotes[message.uid].s_pc
+                    pc.addIceCandidate(new RTCIceCandidate(message.candidate))
+                    break
+                }
+
+                case 'startScreen': {
+                    startScreen()
+                    break
+                }
+
+                case 'closeScreen': {
+                    const ot = message.ot
+                    if (ot == 1) {
+                        closeScreen(message.uid, 1)
+                    } else {
+                        closeScreen(uid, 1)
+                    }
+
+                    break
+                }
+
+                case 'startVideo': {
+                    startVideo()
+                    break
+                }
+
+                case 'closeVideo': {
+                    closeVideo()
+                    break
+                }
+
+                case 'startAudio': {
+                    startAudio()
+                    break
+                }
+
+                case 'closeAudio': {
+                    closeAudio()
+                    break
+                }
+
+                default:
+                    console.log(message)
+                    break
+            }
+        }
+    }
+
+    function removeScreenVideo(id) {
+        if (remotes[id].s_pc) {
+            remotes[id].s_pc.close()
+            if (remotes[id].screenVideo) {
+                screenVideos.removeChild(remotes[id].screenVideo)
+            }
+        }
+    }
+
+    function onleave(id) {
+        if (remotes[id]) {
+            remotes[id].pc.close()
+            videos.removeChild(remotes[id].video)
+            removeScreenVideo(id)
+            delete remotes[id]
+        }
+    }
+
+    function leave() {
+        ws.send(JSON.stringify({ msgType: 'LEAVE', uid: uid, roomId: 1 }))
+    }
+
+    function sendMsg(msg) {
+        msg.msgType = 'PROTOCOL'
+        msg.uid = uid
+        msg.roomId = 1
+
+        ws.send(JSON.stringify(msg))
+    }
+
+    function createRTC(id, stream, type) {
+        const pc = new RTCPeerConnection({
+            iceServers: [{
+                urls: 'stun:stun.l.google.com:19302'
+            }]
+        })
+
+        pc.addEventListener('icecandidate', event => {
+            if (event.candidate) {
+                sendMsg({
+                    type: (type == 1 ? 'candidate' : 's_candidate'),
+                    candidate: {
+                        sdpMLineIndex: event.candidate.sdpMLineIndex,
+                        sdpMid: event.candidate.sdpMid,
+                        candidate: event.candidate.candidate
+                    }
+                })
+            }
+        })
+
+        pc.addEventListener('track', event => {
+            if (type == 1) {
+                if (!remotes[id].video) {
+                    const video = createVideo()
+                    videos.append(video)
+                    remotes[id].video = video
+                }
+
+                remotes[id].video.srcObject = event.streams[0]
+            } else {
+                if (!remotes[id].screenVideo) {
+                    const video = createVideo()
+                    screenVideos.append(video)
+                    remotes[id].screenVideo = video
+                }
+
+                remotes[id].screenVideo.srcObject = event.streams[0]
+            }
+        })
+
+        if (stream) {
+            stream.getTracks().forEach(track => {
+                pc.addTrack(track, stream)
+            });
+        }
+
+        if (!remotes[id]) {
+            remotes[id] = {}
+        }
+
+        if (type == 1) {
+            remotes[id].pc = pc
+        } else {
+            remotes[id].s_pc = pc
+        }
+    }
+
+    function createVideo() {
+        const video = document.createElement('video')
+        video.setAttribute('autoplay', true)
+        video.setAttribute('playsinline', true)
+        return video
+    }
+</script>
+
+</html>
