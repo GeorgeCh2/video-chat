@@ -1,6 +1,8 @@
 # WebRTC Video Chat Demo
 A simple WebRTC video chat demo using Spring Boot, Spring Web, and Spring WebSockets.
 
+![SCR-20231110-sgop](https://github.com/GeorgeCh2/video-chat/assets/22410736/68c9b4bf-ea7c-413a-91c3-36160d2256ae)
+
 # Running the Demo
 1. Clone the repository
 2. Run `mvn clean install` to build the project
