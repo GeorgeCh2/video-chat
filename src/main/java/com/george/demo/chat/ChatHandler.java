@@ -10,16 +10,13 @@ import io.netty.util.AttributeKey;
 import io.netty.util.internal.StringUtil;
 import org.springframework.util.CollectionUtils;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class ChatHandler extends SimpleChannelInboundHandler<String> {
 
     // room - uid map
-    private static Map<String, List<String>> roomMap = new HashMap<>();
+    private static Map<String, Set<String>> roomMap = new HashMap<>();
 
     private static Map<String, Channel> channelMap = new ConcurrentHashMap<>();
 
@@ -43,19 +40,33 @@ public class ChatHandler extends SimpleChannelInboundHandler<String> {
                 context.channel().attr(UID).set(chatMsg.getUid());
                 context.channel().attr(ROOM_ID).set(chatMsg.getRoomId());
 
-                List<String> sameRoomUids = roomMap.get(chatMsg.getRoomId());
+                Set<String> sameRoomUids = roomMap.get(chatMsg.getRoomId());
                 if (sameRoomUids == null) {
-                    sameRoomUids = new ArrayList<>();
+                    sameRoomUids = new HashSet<>();
                     sameRoomUids.add(chatMsg.getUid());
                 } else {
-                    Channel channel = channelMap.get(sameRoomUids.get(0));
-                    channel.writeAndFlush(gson.toJson(ChatMsg.builder()
-                            .msgType(ChatMsg.Type.JOIN)
+                    for (String uid : sameRoomUids) {
+                        if (uid.equals(chatMsg.getUid())) {
+                            continue;
+                        }
+                        Channel channel = channelMap.get(uid);
+                        channel.writeAndFlush(gson.toJson(ChatMsg.builder()
+                                .msgType(ChatMsg.Type.JOIN)
+                                .uid(chatMsg.getUid())
+                                .msg(chatMsg.getUid() + " join the room")
+                                .roomId(chatMsg.getRoomId())
+                                .name(chatMsg.getName())
+                                .build()));
+                    }
+
+                    context.channel().writeAndFlush(gson.toJson(ChatMsg.builder()
+                            .msgType(ChatMsg.Type.PROTOCOL)
                             .uid(chatMsg.getUid())
-                            .msg(chatMsg.getUid() + " join the room")
+                            .msg("{\"type\": \"send_peer\"}")
                             .roomId(chatMsg.getRoomId())
-                            .type(chatMsg.getType())
+                            .name(chatMsg.getName())
                             .build()));
+
                     sameRoomUids.add(chatMsg.getUid());
                 }
                 roomMap.put(chatMsg.getRoomId(), sameRoomUids);
@@ -64,19 +75,23 @@ public class ChatHandler extends SimpleChannelInboundHandler<String> {
 
             case LEAVE:
                 // user leave the room
-                List<String> uids = roomMap.get(chatMsg.getRoomId());
+                Set<String> uids = roomMap.get(chatMsg.getRoomId());
                 uids.remove(chatMsg.getUid());
                 if (CollectionUtils.isEmpty(uids)) {
                     roomMap.remove(chatMsg.getRoomId());
                 } else {
-                    Channel channel = channelMap.get(uids.get(0));
-                    channel.writeAndFlush(gson.toJson(ChatMsg.builder()
-                            .msgType(ChatMsg.Type.LEAVE)
-                            .uid(chatMsg.getUid())
-                            .msg(chatMsg.getUid() + " leave the room")
-                            .roomId(chatMsg.getRoomId())
-                            .type(chatMsg.getType())
-                            .build()));
+                    for (String uid : uids) {
+                        if (uid.equals(chatMsg.getUid())) {
+                            continue;
+                        }
+                        Channel channel = channelMap.get(uid);
+                        channel.writeAndFlush(gson.toJson(ChatMsg.builder()
+                                .msgType(ChatMsg.Type.LEAVE)
+                                .uid(chatMsg.getUid())
+                                .msg(chatMsg.getUid() + " leave the room")
+                                .roomId(chatMsg.getRoomId())
+                                .build()));
+                    }
                     roomMap.put(chatMsg.getRoomId(), uids);
                 }
                 channelMap.remove(chatMsg.getUid());
@@ -86,7 +101,7 @@ public class ChatHandler extends SimpleChannelInboundHandler<String> {
 
             case CHAT:
                 // user chat
-                List<String> uidList = roomMap.get(chatMsg.getRoomId());
+                Set<String> uidList = roomMap.get(chatMsg.getRoomId());
                 for (String uid : uidList) {
                     if (uid.equals(chatMsg.getUid())) {
                         continue;
@@ -98,14 +113,13 @@ public class ChatHandler extends SimpleChannelInboundHandler<String> {
                             .uid(chatMsg.getUid())
                             .msg(chatMsg.getMsg())
                             .roomId(chatMsg.getRoomId())
-                            .type(chatMsg.getType())
                             .build()));
                 }
                 System.out.println("user: " + chatMsg.getUid() + " chat in the room: " + chatMsg.getRoomId());
                 break;
 
             case PROTOCOL:
-                List<String> msgUids = roomMap.get(chatMsg.getRoomId());
+                Set<String> msgUids = roomMap.get(chatMsg.getRoomId());
                 for (String uid : msgUids) {
                     if (uid.equals(chatMsg.getUid())) {
                         continue;
@@ -117,6 +131,7 @@ public class ChatHandler extends SimpleChannelInboundHandler<String> {
                 break;
 
             default:
+                System.out.println("unknown msg type: " + chatMsg.getMsgType());
                 break;
         }
     }
@@ -135,18 +150,23 @@ public class ChatHandler extends SimpleChannelInboundHandler<String> {
     }
 
     private void leaveRoom(String roomId, String uid) {
-        List<String> uids = roomMap.get(roomId);
-        uids.remove(uid);
+        Set<String> uids = roomMap.get(roomId);
         if (CollectionUtils.isEmpty(uids)) {
             roomMap.remove(roomId);
         } else {
-            Channel channel = channelMap.get(uids.get(0));
-            channel.writeAndFlush(gson.toJson(ChatMsg.builder()
-                    .msgType(ChatMsg.Type.LEAVE)
-                    .uid(uid)
-                    .msg(uid + " leave the room")
-                    .roomId(roomId)
-                    .build()));
+            uids.remove(uid);
+            for (String otherUid : uids) {
+                if (uid.equals(otherUid)) {
+                    continue;
+                }
+                Channel channel = channelMap.get(otherUid);
+                channel.writeAndFlush(gson.toJson(ChatMsg.builder()
+                        .msgType(ChatMsg.Type.LEAVE)
+                        .uid(uid)
+                        .msg(uid + " leave the room")
+                        .roomId(roomId)
+                        .build()));
+            }
             roomMap.put(roomId, uids);
         }
         channelMap.remove(uid);

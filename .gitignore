@@ -30,3 +30,9 @@ build/
 
 ### VS Code ###
 .vscode/
+
+node_modules/
+package-lock.json
+yarn.lock
+yarn-error.log
+.DS_Store

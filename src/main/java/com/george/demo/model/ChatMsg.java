@@ -11,13 +11,13 @@ public class ChatMsg implements Serializable {
 
     private Type msgType;
 
-    private String type;
-
     private String uid;
 
     private String msg;
 
     private String roomId;
+
+    private String name;
 
     public enum Type {
         // 心跳
